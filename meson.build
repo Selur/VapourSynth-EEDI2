@@ -1,22 +1,45 @@
 project('EEDI2', 'cpp',
   default_options : ['buildtype=release', 'b_ndebug=if-release', 'cpp_std=c++14'],
-  meson_version : '>=0.48.0',
+  meson_version : '>=0.51.0',
   version : '7'
 )
 
-sources = 'EEDI2/EEDI2.cpp'
+sources = ['EEDI2/EEDI2.cpp']
 
-vapoursynth_dep = dependency('vapoursynth').partial_dependency(compile_args : true, includes : true)
+# Prefer system VapourSynth headers, fall back to the vendored API 4 headers.
+system_vs_dep = dependency('vapoursynth', version : '>=55', required : false)
+if system_vs_dep.found()
+  vapoursynth_dep = system_vs_dep.partial_dependency(compile_args : true, includes : true)
+else
+  vapoursynth_dep = declare_dependency(include_directories : include_directories('include/vapoursynth'))
+endif
 
-add_project_arguments('-ffast-math', language : 'cpp')
+if meson.get_compiler('cpp').get_argument_syntax() == 'gcc'
+  add_project_arguments('-ffast-math', language : 'cpp')
+  if host_machine.cpu_family().startswith('x86')
+    add_project_arguments('-mfpmath=sse', '-msse2', language : 'cpp')
+  endif
+endif
 
-if host_machine.cpu_family().startswith('x86')
-  add_project_arguments('-mfpmath=sse', '-msse2', language : 'cpp')
+# VapourSynth only autoloads *.dylib on macOS, while Meson defaults to *.so for modules.
+suffix = host_machine.system() == 'darwin' ? 'dylib' : []
+
+if get_option('python_package')
+  # Same layout as the VapourSynth PyPI package autoloads from: site-packages/vapoursynth/plugins
+  py = import('python').find_installation(pure : false)
+  install_dir = join_paths(py.get_install_dir(), 'vapoursynth', 'plugins')
+else
+  libdir = join_paths(get_option('prefix'), get_option('libdir'))
+  if system_vs_dep.found()
+    libdir = system_vs_dep.get_variable(pkgconfig : 'libdir', default_value : libdir)
+  endif
+  install_dir = join_paths(libdir, 'vapoursynth')
 endif
 
 shared_module('eedi2', sources,
   dependencies : vapoursynth_dep,
   install : true,
-  install_dir : join_paths(vapoursynth_dep.get_pkgconfig_variable('libdir'), 'vapoursynth'),
+  install_dir : install_dir,
+  name_suffix : suffix,
   gnu_symbol_visibility : 'hidden'
 )

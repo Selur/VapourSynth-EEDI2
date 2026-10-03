@@ -5,11 +5,13 @@ EEDI2 resizes an image by 2x in the vertical direction by copying the existing i
 
 Ported from AviSynth plugin http://bengal.missouri.edu/~kes25c/
 
+This version uses the VapourSynth API 4 (VapourSynth R55 or newer).
+
 
 Usage
 =====
 
-    eedi2.EEDI2(clip clip, int field[, int mthresh=10, int lthresh=20, int vthresh=20, int estr=2, int dstr=4, int maxd=24, int map=0, int nt=50, int pp=1])
+    core.eedi2.EEDI2(clip clip, int field[, int mthresh=10, int lthresh=20, int vthresh=20, int estr=2, int dstr=4, int maxd=24, int map=0, int nt=50, int pp=1])
 
 * clip: Clip to process. Any planar format with integer sample type of 8-16 bit depth is supported.
 
@@ -44,14 +46,18 @@ Compilation
 ===========
 
 ```
-meson build
+meson setup build
 ninja -C build
 ```
 
-or
+If no system VapourSynth development files are found, the vendored API 4 headers in `include/vapoursynth` are used.
+
+
+Installation
+============
+
+Every push builds Python wheels for Windows x64, Linux x86_64 and macOS arm64 (see `.github/workflows/build-wheels.yml`); tagged releases (`v*`) attach them to a GitHub release. The wheel installs the plugin into the VapourSynth plugin folder of the Python package, so it is autoloaded:
 
 ```
-./autogen.sh
-./configure
-make
+pip install vapoursynth_eedi2-*.whl
 ```
