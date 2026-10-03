@@ -70,7 +70,7 @@ for fmt in (vs.YUV420P8, vs.YUV422P10, vs.YUV444P16, vs.GRAY8, vs.GRAY12):
         check(out.height == h, f'map={m} height {fmt.name}')
         out.get_frame(0)
 
-expect_error(lambda: core.eedi2.EEDI2(core.std.BlankClip(format=vs.RGB24), field=1).get_frame(0), 'RGB must fail')
+expect_error(lambda: core.eedi2.EEDI2(core.std.BlankClip(format=vs.GRAYS), field=1).get_frame(0), 'float input must fail')
 expect_error(lambda: core.eedi2.EEDI2(core.std.BlankClip(format=vs.YUV420P8), field=4).get_frame(0), 'field=4 must fail')
 expect_error(lambda: core.eedi2.EEDI2(core.std.BlankClip(format=vs.YUV420P8), field=1, maxd=30).get_frame(0), 'maxd=30 must fail')
 
