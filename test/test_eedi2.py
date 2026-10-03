@@ -19,11 +19,12 @@ WIDTH, HEIGHT, FRAMES = 64, 48, 4
 
 
 def noise_clip(fmt):
-    rng = np.random.default_rng(1234)
     base = core.std.BlankClip(width=WIDTH, height=HEIGHT, length=FRAMES, format=fmt)
     peak = (1 << core.get_video_format(fmt).bits_per_sample) - 1
 
     def fill(n, f):
+        # Seeded per frame so that every request returns identical data.
+        rng = np.random.default_rng(1234 + n)
         f = f.copy()
         for p in range(f.format.num_planes):
             a = np.asarray(f[p])
