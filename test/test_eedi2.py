@@ -21,7 +21,7 @@ WIDTH, HEIGHT, FRAMES = 64, 48, 4
 def noise_clip(fmt):
     rng = np.random.default_rng(1234)
     base = core.std.BlankClip(width=WIDTH, height=HEIGHT, length=FRAMES, format=fmt)
-    peak = (1 << fmt.bits_per_sample) - 1
+    peak = (1 << core.get_video_format(fmt).bits_per_sample) - 1
 
     def fill(n, f):
         f = f.copy()
