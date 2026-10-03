@@ -111,3 +111,13 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+build/
+*.swp
+*.o
+*.so
+*.dll
+*.dylib
+.DS_Store
+__pycache__/
+dist/
+wheelhouse/

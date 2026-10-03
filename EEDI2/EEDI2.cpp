@@ -28,15 +28,16 @@
 #include <algorithm>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
 
-#include <VapourSynth.h>
-#include <VSHelper.h>
+#include <VapourSynth4.h>
+#include <VSHelper4.h>
 
 struct EEDI2Data {
-    VSNodeRef * node;
+    VSNode * node;
     const VSVideoInfo * vi;
     VSVideoInfo vi2;
     int field, mthresh, lthresh, vthresh, estr, dstr, maxd, map, pp;
@@ -44,12 +45,13 @@ struct EEDI2Data {
     int8_t * limlut;
     int16_t * limlut2;
     std::unordered_map<std::thread::id, int *> cx2, cy2, cxy, tmpc;
+    mutable std::mutex lock;
 };
 
 template<typename T>
-static void buildEdgeMask(const VSFrameRef * src, VSFrameRef * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
-    const T shift = d->vi->format->bitsPerSample - 8;
+static void buildEdgeMask(const VSFrame * src, VSFrame * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
+    const T shift = d->vi->format.bitsPerSample - 8;
     const T ten = 10 << shift;
 
     const unsigned width = vsapi->getFrameWidth(src, plane);
@@ -103,8 +105,8 @@ static void buildEdgeMask(const VSFrameRef * src, VSFrameRef * dst, const int pl
 }
 
 template<typename T>
-static void erode(const VSFrameRef * msk, VSFrameRef * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
+static void erode(const VSFrame * msk, VSFrame * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
 
     const unsigned width = vsapi->getFrameWidth(msk, plane);
     const unsigned height = vsapi->getFrameHeight(msk, plane);
@@ -112,7 +114,7 @@ static void erode(const VSFrameRef * msk, VSFrameRef * dst, const int plane, con
     const T * mskp = reinterpret_cast<const T *>(vsapi->getReadPtr(msk, plane));
     T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
 
-    vs_bitblt(dstp, vsapi->getStride(dst, plane), mskp, vsapi->getStride(msk, plane), width * sizeof(T), height);
+    vsh::bitblt(dstp, vsapi->getStride(dst, plane), mskp, vsapi->getStride(msk, plane), width * sizeof(T), height);
 
     mskp += stride;
     dstp += stride;
@@ -156,8 +158,8 @@ static void erode(const VSFrameRef * msk, VSFrameRef * dst, const int plane, con
 }
 
 template<typename T>
-static void dilate(const VSFrameRef * msk, VSFrameRef * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
+static void dilate(const VSFrame * msk, VSFrame * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
 
     const unsigned width = vsapi->getFrameWidth(msk, plane);
     const unsigned height = vsapi->getFrameHeight(msk, plane);
@@ -165,7 +167,7 @@ static void dilate(const VSFrameRef * msk, VSFrameRef * dst, const int plane, co
     const T * mskp = reinterpret_cast<const T *>(vsapi->getReadPtr(msk, plane));
     T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
 
-    vs_bitblt(dstp, vsapi->getStride(dst, plane), mskp, vsapi->getStride(msk, plane), width * sizeof(T), height);
+    vsh::bitblt(dstp, vsapi->getStride(dst, plane), mskp, vsapi->getStride(msk, plane), width * sizeof(T), height);
 
     mskp += stride;
     dstp += stride;
@@ -209,8 +211,8 @@ static void dilate(const VSFrameRef * msk, VSFrameRef * dst, const int plane, co
 }
 
 template<typename T>
-static void removeSmallHorzGaps(const VSFrameRef * msk, VSFrameRef * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
+static void removeSmallHorzGaps(const VSFrame * msk, VSFrame * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
 
     const unsigned width = vsapi->getFrameWidth(msk, plane);
     const unsigned height = vsapi->getFrameHeight(msk, plane);
@@ -218,7 +220,7 @@ static void removeSmallHorzGaps(const VSFrameRef * msk, VSFrameRef * dst, const 
     const T * mskp = reinterpret_cast<const T *>(vsapi->getReadPtr(msk, plane));
     T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
 
-    vs_bitblt(dstp, vsapi->getStride(dst, plane), mskp, vsapi->getStride(msk, plane), width * sizeof(T), height);
+    vsh::bitblt(dstp, vsapi->getStride(dst, plane), mskp, vsapi->getStride(msk, plane), width * sizeof(T), height);
 
     mskp += stride;
     dstp += stride;
@@ -244,10 +246,10 @@ static void removeSmallHorzGaps(const VSFrameRef * msk, VSFrameRef * dst, const 
 }
 
 template<typename T>
-static void calcDirections(const VSFrameRef * src, const VSFrameRef * msk, VSFrameRef * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T neutral = 1 << (d->vi->format->bitsPerSample - 1);
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
-    const T shift2 = 2 + (d->vi->format->bitsPerSample - 8);
+static void calcDirections(const VSFrame * src, const VSFrame * msk, VSFrame * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T neutral = 1 << (d->vi->format.bitsPerSample - 1);
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
+    const T shift2 = 2 + (d->vi->format.bitsPerSample - 8);
 
     const int width = vsapi->getFrameWidth(src, plane);
     const unsigned height = vsapi->getFrameHeight(src, plane);
@@ -269,7 +271,7 @@ static void calcDirections(const VSFrameRef * src, const VSFrameRef * msk, VSFra
     const T * mskpp = mskp - stride;
     const T * mskpn = mskp + stride;
 
-    const int maxd = d->maxd >> (plane ? d->vi->format->subSamplingW : 0);
+    const int maxd = d->maxd >> (plane ? d->vi->format.subSamplingW : 0);
 
     for (unsigned y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
@@ -388,10 +390,10 @@ static void calcDirections(const VSFrameRef * src, const VSFrameRef * msk, VSFra
 }
 
 template<typename T>
-static void filterDirMap(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFrameRef * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T neutral = 1 << (d->vi->format->bitsPerSample - 1);
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
-    const T shift2 = 2 + (d->vi->format->bitsPerSample - 8);
+static void filterDirMap(const VSFrame * msk, const VSFrame * dmsk, VSFrame * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T neutral = 1 << (d->vi->format.bitsPerSample - 1);
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
+    const T shift2 = 2 + (d->vi->format.bitsPerSample - 8);
 
     const unsigned width = vsapi->getFrameWidth(msk, plane);
     const unsigned height = vsapi->getFrameHeight(msk, plane);
@@ -400,7 +402,7 @@ static void filterDirMap(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFram
     const T * dmskp = reinterpret_cast<const T *>(vsapi->getReadPtr(dmsk, plane));
     T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
 
-    vs_bitblt(dstp, vsapi->getStride(dst, plane), dmskp, vsapi->getStride(dmsk, plane), width * sizeof(T), height);
+    vsh::bitblt(dstp, vsapi->getStride(dst, plane), dmskp, vsapi->getStride(dmsk, plane), width * sizeof(T), height);
 
     mskp += stride;
     dmskp += stride;
@@ -472,10 +474,10 @@ static void filterDirMap(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFram
 }
 
 template<typename T>
-static void expandDirMap(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFrameRef * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T neutral = 1 << (d->vi->format->bitsPerSample - 1);
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
-    const T shift2 = 2 + (d->vi->format->bitsPerSample - 8);
+static void expandDirMap(const VSFrame * msk, const VSFrame * dmsk, VSFrame * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T neutral = 1 << (d->vi->format.bitsPerSample - 1);
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
+    const T shift2 = 2 + (d->vi->format.bitsPerSample - 8);
 
     const unsigned width = vsapi->getFrameWidth(msk, plane);
     const unsigned height = vsapi->getFrameHeight(msk, plane);
@@ -484,7 +486,7 @@ static void expandDirMap(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFram
     const T * dmskp = reinterpret_cast<const T *>(vsapi->getReadPtr(dmsk, plane));
     T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
 
-    vs_bitblt(dstp, vsapi->getStride(dst, plane), dmskp, vsapi->getStride(dmsk, plane), width * sizeof(T), height);
+    vsh::bitblt(dstp, vsapi->getStride(dst, plane), dmskp, vsapi->getStride(dmsk, plane), width * sizeof(T), height);
 
     mskp += stride;
     dmskp += stride;
@@ -550,10 +552,10 @@ static void expandDirMap(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFram
 }
 
 template<typename T>
-static void filterMap(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFrameRef * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T neutral = 1 << (d->vi->format->bitsPerSample - 1);
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
-    const T shift = d->vi->format->bitsPerSample - 8;
+static void filterMap(const VSFrame * msk, const VSFrame * dmsk, VSFrame * dst, const int plane, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T neutral = 1 << (d->vi->format.bitsPerSample - 1);
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
+    const T shift = d->vi->format.bitsPerSample - 8;
     const int twleve = 12 << shift;
 
     const int width = vsapi->getFrameWidth(msk, plane);
@@ -563,7 +565,7 @@ static void filterMap(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFrameRe
     const T * dmskp = reinterpret_cast<const T *>(vsapi->getReadPtr(dmsk, plane));
     T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
 
-    vs_bitblt(dstp, vsapi->getStride(dst, plane), dmskp, vsapi->getStride(dmsk, plane), width * sizeof(T), height);
+    vsh::bitblt(dstp, vsapi->getStride(dst, plane), dmskp, vsapi->getStride(dmsk, plane), width * sizeof(T), height);
 
     mskp += stride;
     dmskp += stride;
@@ -636,16 +638,16 @@ static void filterMap(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFrameRe
     }
 }
 
-static void upscaleBy2(const VSFrameRef * src, VSFrameRef * dst, const int plane, const unsigned field, const unsigned bytesPerSample, const VSAPI * vsapi) noexcept {
-    vs_bitblt(vsapi->getWritePtr(dst, plane) + vsapi->getStride(dst, plane) * (1 - field), vsapi->getStride(dst, plane) * 2,
+static void upscaleBy2(const VSFrame * src, VSFrame * dst, const int plane, const unsigned field, const unsigned bytesPerSample, const VSAPI * vsapi) noexcept {
+    vsh::bitblt(vsapi->getWritePtr(dst, plane) + vsapi->getStride(dst, plane) * (1 - field), vsapi->getStride(dst, plane) * 2,
               vsapi->getReadPtr(src, plane), vsapi->getStride(src, plane), vsapi->getFrameWidth(src, plane) * bytesPerSample, vsapi->getFrameHeight(src, plane));
 }
 
 template<typename T>
-static void markDirections2X(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFrameRef * dst, const int plane, const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T neutral = 1 << (d->vi->format->bitsPerSample - 1);
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
-    const T shift2 = 2 + (d->vi->format->bitsPerSample - 8);
+static void markDirections2X(const VSFrame * msk, const VSFrame * dmsk, VSFrame * dst, const int plane, const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T neutral = 1 << (d->vi->format.bitsPerSample - 1);
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
+    const T shift2 = 2 + (d->vi->format.bitsPerSample - 8);
 
     const unsigned width = vsapi->getFrameWidth(msk, plane);
     const unsigned height = vsapi->getFrameHeight(msk, plane);
@@ -727,10 +729,10 @@ static void markDirections2X(const VSFrameRef * msk, const VSFrameRef * dmsk, VS
 }
 
 template<typename T>
-static void filterDirMap2X(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFrameRef * dst, const int plane, const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T neutral = 1 << (d->vi->format->bitsPerSample - 1);
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
-    const T shift2 = 2 + (d->vi->format->bitsPerSample - 8);
+static void filterDirMap2X(const VSFrame * msk, const VSFrame * dmsk, VSFrame * dst, const int plane, const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T neutral = 1 << (d->vi->format.bitsPerSample - 1);
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
+    const T shift2 = 2 + (d->vi->format.bitsPerSample - 8);
 
     const unsigned width = vsapi->getFrameWidth(msk, plane);
     const unsigned height = vsapi->getFrameHeight(msk, plane);
@@ -739,7 +741,7 @@ static void filterDirMap2X(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFr
     const T * dmskp = reinterpret_cast<const T *>(vsapi->getReadPtr(dmsk, plane));
     T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
 
-    vs_bitblt(dstp, vsapi->getStride(dst, plane), dmskp, vsapi->getStride(dmsk, plane), width * sizeof(T), height);
+    vsh::bitblt(dstp, vsapi->getStride(dst, plane), dmskp, vsapi->getStride(dmsk, plane), width * sizeof(T), height);
 
     mskp += stride * (1 - field);
     dmskp += stride * (2 - field);
@@ -819,10 +821,10 @@ static void filterDirMap2X(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFr
 }
 
 template<typename T>
-static void expandDirMap2X(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFrameRef * dst, const int plane, const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T neutral = 1 << (d->vi->format->bitsPerSample - 1);
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
-    const T shift2 = 2 + (d->vi->format->bitsPerSample - 8);
+static void expandDirMap2X(const VSFrame * msk, const VSFrame * dmsk, VSFrame * dst, const int plane, const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T neutral = 1 << (d->vi->format.bitsPerSample - 1);
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
+    const T shift2 = 2 + (d->vi->format.bitsPerSample - 8);
 
     const unsigned width = vsapi->getFrameWidth(msk, plane);
     const unsigned height = vsapi->getFrameHeight(msk, plane);
@@ -831,7 +833,7 @@ static void expandDirMap2X(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFr
     const T * dmskp = reinterpret_cast<const T *>(vsapi->getReadPtr(dmsk, plane));
     T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
 
-    vs_bitblt(dstp, vsapi->getStride(dst, plane), dmskp, vsapi->getStride(dmsk, plane), width * sizeof(T), height);
+    vsh::bitblt(dstp, vsapi->getStride(dst, plane), dmskp, vsapi->getStride(dmsk, plane), width * sizeof(T), height);
 
     mskp += stride * (1 - field);
     dmskp += stride * (2 - field);
@@ -905,10 +907,10 @@ static void expandDirMap2X(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFr
 }
 
 template<typename T>
-static void fillGaps2X(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFrameRef * dst, const int plane, const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T neutral = 1 << (d->vi->format->bitsPerSample - 1);
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
-    const T shift = d->vi->format->bitsPerSample - 8;
+static void fillGaps2X(const VSFrame * msk, const VSFrame * dmsk, VSFrame * dst, const int plane, const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T neutral = 1 << (d->vi->format.bitsPerSample - 1);
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
+    const T shift = d->vi->format.bitsPerSample - 8;
     const T shift2 = 2 + shift;
     const int eight = 8 << shift;
     const int twenty = 20 << shift;
@@ -921,7 +923,7 @@ static void fillGaps2X(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFrameR
     const T * dmskp = reinterpret_cast<const T *>(vsapi->getReadPtr(dmsk, plane));
     T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
 
-    vs_bitblt(dstp, vsapi->getStride(dst, plane), dmskp, vsapi->getStride(dmsk, plane), width * sizeof(T), height);
+    vsh::bitblt(dstp, vsapi->getStride(dst, plane), dmskp, vsapi->getStride(dmsk, plane), width * sizeof(T), height);
 
     mskp += stride * (1 - field);
     dmskp += stride * (2 - field);
@@ -1017,10 +1019,10 @@ static void fillGaps2X(const VSFrameRef * msk, const VSFrameRef * dmsk, VSFrameR
 }
 
 template<typename T>
-static void interpolateLattice(const VSFrameRef * omsk, VSFrameRef * dmsk, VSFrameRef * dst, const int plane, const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T neutral = 1 << (d->vi->format->bitsPerSample - 1);
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
-    const T shift = d->vi->format->bitsPerSample - 8;
+static void interpolateLattice(const VSFrame * omsk, VSFrame * dmsk, VSFrame * dst, const int plane, const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T neutral = 1 << (d->vi->format.bitsPerSample - 1);
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
+    const T shift = d->vi->format.bitsPerSample - 8;
     const T shift2 = 2 + shift;
     const T three = 3 << shift;
     const T nine = 9 << shift;
@@ -1120,7 +1122,7 @@ static void interpolateLattice(const VSFrameRef * omsk, VSFrameRef * dmsk, VSFra
                 dstpn[x] = val;
                 dmskp[x] = neutral + (dir << shift2);
             } else {
-                const int dt = 4 >> (plane ? d->vi->format->subSamplingW : 0);
+                const int dt = 4 >> (plane ? d->vi->format.subSamplingW : 0);
                 const int uStart2 = std::max(-x + 1, -dt);
                 const int uStop2 = std::min(width - 2 - x, dt);
                 const unsigned minm = std::min(dstp[x], dstpnn[x]);
@@ -1158,10 +1160,10 @@ static void interpolateLattice(const VSFrameRef * omsk, VSFrameRef * dmsk, VSFra
 }
 
 template<typename T>
-static void postProcess(const VSFrameRef * nmsk, const VSFrameRef * omsk, VSFrameRef * dst, const int plane, const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
-    const T neutral = 1 << (d->vi->format->bitsPerSample - 1);
-    const T peak = (1 << d->vi->format->bitsPerSample) - 1;
-    const T shift2 = 2 + (d->vi->format->bitsPerSample - 8);
+static void postProcess(const VSFrame * nmsk, const VSFrame * omsk, VSFrame * dst, const int plane, const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    const T neutral = 1 << (d->vi->format.bitsPerSample - 1);
+    const T peak = (1 << d->vi->format.bitsPerSample) - 1;
+    const T shift2 = 2 + (d->vi->format.bitsPerSample - 8);
 
     const unsigned width = vsapi->getFrameWidth(nmsk, plane);
     const unsigned height = vsapi->getFrameHeight(nmsk, plane);
@@ -1193,7 +1195,7 @@ static void postProcess(const VSFrameRef * nmsk, const VSFrameRef * omsk, VSFram
 }
 
 template<typename T>
-static void gaussianBlur1(const VSFrameRef * src, VSFrameRef * tmp, VSFrameRef * dst, const int plane, const VSAPI * vsapi) noexcept {
+static void gaussianBlur1(const VSFrame * src, VSFrame * tmp, VSFrame * dst, const int plane, const VSAPI * vsapi) noexcept {
     const unsigned width = vsapi->getFrameWidth(src, plane);
     const unsigned height = vsapi->getFrameHeight(src, plane);
     const unsigned stride = vsapi->getStride(src, plane) / sizeof(T);
@@ -1303,7 +1305,7 @@ static void gaussianBlur1(const VSFrameRef * src, VSFrameRef * tmp, VSFrameRef *
 }
 
 template<typename T>
-static void calcDerivatives(const VSFrameRef * src, int * VS_RESTRICT x2, int * VS_RESTRICT y2, int * VS_RESTRICT xy,
+static void calcDerivatives(const VSFrame * src, int * VS_RESTRICT x2, int * VS_RESTRICT y2, int * VS_RESTRICT xy,
                             const int plane, const unsigned bitsPerSample, const VSAPI * vsapi) noexcept {
     const T shift = bitsPerSample - 8;
 
@@ -1556,7 +1558,7 @@ static void gaussianBlurSqrt2(const int * src, int * tmp, int * dst, const unsig
 }
 
 template<typename T>
-static void postProcessCorner(const VSFrameRef * msk, VSFrameRef * dst, const int * x2, const int * y2, const int * xy,
+static void postProcessCorner(const VSFrame * msk, VSFrame * dst, const int * x2, const int * y2, const int * xy,
                               const int plane, const unsigned field, const unsigned bitsPerSample, const VSAPI * vsapi) noexcept {
     const T neutral = 1 << (bitsPerSample - 1);
     const T peak = (1 << bitsPerSample) - 1;
@@ -1604,16 +1606,20 @@ static void postProcessCorner(const VSFrameRef * msk, VSFrameRef * dst, const in
 }
 
 template<typename T>
-static void process(const VSFrameRef * src, VSFrameRef * dst, VSFrameRef * msk, VSFrameRef * tmp,
-                    VSFrameRef * dst2, VSFrameRef * dst2M, VSFrameRef * tmp2, VSFrameRef * tmp2_2, VSFrameRef * msk2,
-                    const unsigned field, const EEDI2Data * d, VSCore * core, const VSAPI * vsapi) noexcept {
-    const auto threadId = std::this_thread::get_id();
-    int * cx2 = d->cx2.at(threadId);
-    int * cy2 = d->cy2.at(threadId);
-    int * cxy = d->cxy.at(threadId);
-    int * tmpc = d->tmpc.at(threadId);
+static void process(const VSFrame * src, VSFrame * dst, VSFrame * msk, VSFrame * tmp,
+                    VSFrame * dst2, VSFrame * dst2M, VSFrame * tmp2, VSFrame * tmp2_2, VSFrame * msk2,
+                    const unsigned field, const EEDI2Data * d, const VSAPI * vsapi) noexcept {
+    int * cx2, * cy2, * cxy, * tmpc;
+    {
+        const auto threadId = std::this_thread::get_id();
+        std::lock_guard<std::mutex> guard{ d->lock };
+        cx2 = d->cx2.at(threadId);
+        cy2 = d->cy2.at(threadId);
+        cxy = d->cxy.at(threadId);
+        tmpc = d->tmpc.at(threadId);
+    }
 
-    for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
+    for (int plane = 0; plane < d->vi->format.numPlanes; plane++) {
         buildEdgeMask<T>(src, msk, plane, d, vsapi);
         erode<T>(msk, tmp, plane, d, vsapi);
         dilate<T>(tmp, msk, plane, d, vsapi);
@@ -1642,7 +1648,7 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, VSFrameRef * msk, 
                     interpolateLattice<T>(tmp2_2, tmp2, dst2, plane, field, d, vsapi);
 
                     if (d->pp == 1 || d->pp == 3) {
-                        vs_bitblt(vsapi->getWritePtr(tmp2_2, plane), vsapi->getStride(tmp2_2, plane), vsapi->getReadPtr(tmp2, plane), vsapi->getStride(tmp2, plane),
+                        vsh::bitblt(vsapi->getWritePtr(tmp2_2, plane), vsapi->getStride(tmp2_2, plane), vsapi->getReadPtr(tmp2, plane), vsapi->getStride(tmp2, plane),
                                   vsapi->getFrameWidth(tmp2, plane) * sizeof(T), vsapi->getFrameHeight(tmp2, plane));
 
                         filterDirMap2X<T>(msk2, tmp2, dst2M, plane, field, d, vsapi);
@@ -1652,11 +1658,11 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, VSFrameRef * msk, 
 
                     if (d->pp == 2 || d->pp == 3) {
                         gaussianBlur1<T>(src, tmp, dst, plane, vsapi);
-                        calcDerivatives<T>(dst, cx2, cy2, cxy, plane, d->vi->format->bitsPerSample, vsapi);
+                        calcDerivatives<T>(dst, cx2, cy2, cxy, plane, d->vi->format.bitsPerSample, vsapi);
                         gaussianBlurSqrt2(cx2, tmpc, cx2, vsapi->getFrameWidth(src, plane), vsapi->getFrameHeight(src, plane));
                         gaussianBlurSqrt2(cy2, tmpc, cy2, vsapi->getFrameWidth(src, plane), vsapi->getFrameHeight(src, plane));
                         gaussianBlurSqrt2(cxy, tmpc, cxy, vsapi->getFrameWidth(src, plane), vsapi->getFrameHeight(src, plane));
-                        postProcessCorner<T>(tmp2_2, dst2, cx2, cy2, cxy, plane, field, d->vi->format->bitsPerSample, vsapi);
+                        postProcessCorner<T>(tmp2_2, dst2, cx2, cy2, cxy, plane, field, d->vi->format.bitsPerSample, vsapi);
                     }
                 }
             }
@@ -1664,19 +1670,15 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, VSFrameRef * msk, 
     }
 }
 
-static void VS_CC eedi2Init(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi) {
-    EEDI2Data * d = static_cast<EEDI2Data *>(*instanceData);
-    vsapi->setVideoInfo(&d->vi2, 1, node);
-}
-
-static const VSFrameRef *VS_CC eedi2GetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
-    EEDI2Data * d = static_cast<EEDI2Data *>(*instanceData);
+static const VSFrame *VS_CC eedi2GetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    EEDI2Data * d = static_cast<EEDI2Data *>(instanceData);
 
     if (activationReason == arInitial) {
         vsapi->requestFrameFilter(n, d->node, frameCtx);
     } else if (activationReason == arAllFramesReady) {
         try {
-            auto threadId = std::this_thread::get_id();
+            const auto threadId = std::this_thread::get_id();
+            std::lock_guard<std::mutex> guard{ d->lock };
 
             if (!d->cx2.count(threadId)) {
                 if (d->pp > 1 && d->map == 0) {
@@ -1726,38 +1728,38 @@ static const VSFrameRef *VS_CC eedi2GetFrame(int n, int activationReason, void *
             return nullptr;
         }
 
-        const VSFrameRef * src = vsapi->getFrameFilter(n, d->node, frameCtx);
-        VSFrameRef * dst = vsapi->newVideoFrame(d->vi->format, d->vi->width, d->vi->height, src, core);
-        VSFrameRef * msk = vsapi->newVideoFrame(d->vi->format, d->vi->width, d->vi->height, src, core);
-        VSFrameRef * tmp = vsapi->newVideoFrame(d->vi->format, d->vi->width, d->vi->height, src, core);
+        const VSFrame * src = vsapi->getFrameFilter(n, d->node, frameCtx);
+        VSFrame * dst = vsapi->newVideoFrame(&d->vi->format, d->vi->width, d->vi->height, src, core);
+        VSFrame * msk = vsapi->newVideoFrame(&d->vi->format, d->vi->width, d->vi->height, src, core);
+        VSFrame * tmp = vsapi->newVideoFrame(&d->vi->format, d->vi->width, d->vi->height, src, core);
 
-        VSFrameRef * dst2 = nullptr, * dst2M = nullptr, * tmp2 = nullptr, * tmp2_2 = nullptr, * msk2 = nullptr;
+        VSFrame * dst2 = nullptr, * dst2M = nullptr, * tmp2 = nullptr, * tmp2_2 = nullptr, * msk2 = nullptr;
         if (d->map == 0 || d->map == 3) {
-            dst2 = vsapi->newVideoFrame(d->vi2.format, d->vi2.width, d->vi2.height, src, core);
-            dst2M = vsapi->newVideoFrame(d->vi2.format, d->vi2.width, d->vi2.height, src, core);
-            tmp2 = vsapi->newVideoFrame(d->vi2.format, d->vi2.width, d->vi2.height, src, core);
-            tmp2_2 = vsapi->newVideoFrame(d->vi2.format, d->vi2.width, d->vi2.height, src, core);
-            msk2 = vsapi->newVideoFrame(d->vi2.format, d->vi2.width, d->vi2.height, src, core);
+            dst2 = vsapi->newVideoFrame(&d->vi2.format, d->vi2.width, d->vi2.height, src, core);
+            dst2M = vsapi->newVideoFrame(&d->vi2.format, d->vi2.width, d->vi2.height, src, core);
+            tmp2 = vsapi->newVideoFrame(&d->vi2.format, d->vi2.width, d->vi2.height, src, core);
+            tmp2_2 = vsapi->newVideoFrame(&d->vi2.format, d->vi2.width, d->vi2.height, src, core);
+            msk2 = vsapi->newVideoFrame(&d->vi2.format, d->vi2.width, d->vi2.height, src, core);
         }
 
         unsigned field = d->field;
         if (d->fieldS > 1)
             field = (n & 1) ? (d->fieldS == 2 ? 1 : 0) : (d->fieldS == 2 ? 0 : 1);
 
-        if (d->vi->format->bytesPerSample == 1)
-            process<uint8_t>(src, dst, msk, tmp, dst2, dst2M, tmp2, tmp2_2, msk2, field, d, core, vsapi);
+        if (d->vi->format.bytesPerSample == 1)
+            process<uint8_t>(src, dst, msk, tmp, dst2, dst2M, tmp2, tmp2_2, msk2, field, d, vsapi);
         else
-            process<uint16_t>(src, dst, msk, tmp, dst2, dst2M, tmp2, tmp2_2, msk2, field, d, core, vsapi);
+            process<uint16_t>(src, dst, msk, tmp, dst2, dst2M, tmp2, tmp2_2, msk2, field, d, vsapi);
 
         if (d->map == 0) {
             vsapi->freeFrame(dst);
-            dst = const_cast<VSFrameRef *>(vsapi->cloneFrameRef(dst2));
+            dst = const_cast<VSFrame *>(vsapi->addFrameRef(dst2));
         } else if (d->map == 1) {
             vsapi->freeFrame(dst);
-            dst = const_cast<VSFrameRef *>(vsapi->cloneFrameRef(msk));
+            dst = const_cast<VSFrame *>(vsapi->addFrameRef(msk));
         } else if (d->map == 3) {
             vsapi->freeFrame(dst);
-            dst = const_cast<VSFrameRef *>(vsapi->cloneFrameRef(tmp2));
+            dst = const_cast<VSFrame *>(vsapi->addFrameRef(tmp2));
         }
 
         vsapi->freeFrame(src);
@@ -1798,12 +1800,12 @@ static void VS_CC eedi2Create(const VSMap *in, VSMap *out, void *userData, VSCor
     std::unique_ptr<EEDI2Data> d{ new EEDI2Data{} };
     int err;
 
-    d->node = vsapi->propGetNode(in, "clip", 0, nullptr);
+    d->node = vsapi->mapGetNode(in, "clip", 0, nullptr);
     d->vi = vsapi->getVideoInfo(d->node);
     d->vi2 = *d->vi;
 
     try {
-        if (!isConstantFormat(d->vi) || d->vi->format->sampleType != stInteger || d->vi->format->bitsPerSample > 16)
+        if (!vsh::isConstantVideoFormat(d->vi) || d->vi->format.sampleType != stInteger || d->vi->format.bitsPerSample > 16)
             throw std::string{ "only constant format 8-16 bits integer input supported" };
 
         if (d->vi->width < 8)
@@ -1812,39 +1814,39 @@ static void VS_CC eedi2Create(const VSMap *in, VSMap *out, void *userData, VSCor
         if (d->vi->height < 7)
             throw std::string{ "the clip's height must be greater than or equal to 7" };
 
-        d->field = int64ToIntS(vsapi->propGetInt(in, "field", 0, nullptr));
+        d->field = vsh::int64ToIntS(vsapi->mapGetInt(in, "field", 0, nullptr));
 
-        d->mthresh = int64ToIntS(vsapi->propGetInt(in, "mthresh", 0, &err));
+        d->mthresh = vsh::int64ToIntS(vsapi->mapGetInt(in, "mthresh", 0, &err));
         if (err)
             d->mthresh = 10;
 
-        d->lthresh = int64ToIntS(vsapi->propGetInt(in, "lthresh", 0, &err));
+        d->lthresh = vsh::int64ToIntS(vsapi->mapGetInt(in, "lthresh", 0, &err));
         if (err)
             d->lthresh = 20;
 
-        d->vthresh = int64ToIntS(vsapi->propGetInt(in, "vthresh", 0, &err));
+        d->vthresh = vsh::int64ToIntS(vsapi->mapGetInt(in, "vthresh", 0, &err));
         if (err)
             d->vthresh = 20;
 
-        d->estr = int64ToIntS(vsapi->propGetInt(in, "estr", 0, &err));
+        d->estr = vsh::int64ToIntS(vsapi->mapGetInt(in, "estr", 0, &err));
         if (err)
             d->estr = 2;
 
-        d->dstr = int64ToIntS(vsapi->propGetInt(in, "dstr", 0, &err));
+        d->dstr = vsh::int64ToIntS(vsapi->mapGetInt(in, "dstr", 0, &err));
         if (err)
             d->dstr = 4;
 
-        d->maxd = int64ToIntS(vsapi->propGetInt(in, "maxd", 0, &err));
+        d->maxd = vsh::int64ToIntS(vsapi->mapGetInt(in, "maxd", 0, &err));
         if (err)
             d->maxd = 24;
 
-        d->map = int64ToIntS(vsapi->propGetInt(in, "map", 0, &err));
+        d->map = vsh::int64ToIntS(vsapi->mapGetInt(in, "map", 0, &err));
 
-        int nt = int64ToIntS(vsapi->propGetInt(in, "nt", 0, &err));
+        int nt = vsh::int64ToIntS(vsapi->mapGetInt(in, "nt", 0, &err));
         if (err)
             nt = 50;
 
-        d->pp = int64ToIntS(vsapi->propGetInt(in, "pp", 0, &err));
+        d->pp = vsh::int64ToIntS(vsapi->mapGetInt(in, "pp", 0, &err));
         if (err)
             d->pp = 1;
 
@@ -1901,7 +1903,7 @@ static void VS_CC eedi2Create(const VSMap *in, VSMap *out, void *userData, VSCor
         d->limlut2 = new int16_t[33];
         std::copy_n(limlut, 33, d->limlut);
 
-        const unsigned shift = d->vi->format->bitsPerSample - 8;
+        const unsigned shift = d->vi->format.bitsPerSample - 8;
         nt <<= shift;
         for (unsigned i = 0; i < 33; i++)
             d->limlut2[i] = limlut[i] << shift;
@@ -1912,36 +1914,41 @@ static void VS_CC eedi2Create(const VSMap *in, VSMap *out, void *userData, VSCor
         d->nt13 = nt * 13;
         d->nt19 = nt * 19;
 
-        const unsigned numThreads = vsapi->getCoreInfo(core)->numThreads;
+        VSCoreInfo info;
+        vsapi->getCoreInfo(core, &info);
+        const unsigned numThreads = info.numThreads;
         d->cx2.reserve(numThreads);
         d->cy2.reserve(numThreads);
         d->cxy.reserve(numThreads);
         d->tmpc.reserve(numThreads);
     } catch (const std::string & error) {
-        vsapi->setError(out, ("EEDI2: " + error).c_str());
+        vsapi->mapSetError(out, ("EEDI2: " + error).c_str());
         vsapi->freeNode(d->node);
         return;
     }
 
-    vsapi->createFilter(in, out, "EEDI2", eedi2Init, eedi2GetFrame, eedi2Free, fmParallel, 0, d.release(), core);
+    VSFilterDependency deps[] = { { d->node, rpStrictSpatial } };
+    vsapi->createVideoFilter(out, "EEDI2", &d->vi2, eedi2GetFrame, eedi2Free, fmParallel, deps, 1, d.get(), core);
+    d.release();
 }
 
 //////////////////////////////////////////
 // Init
 
-VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin) {
-    configFunc("com.holywu.eedi2", "eedi2", "EEDI2", VAPOURSYNTH_API_VERSION, 1, plugin);
-    registerFunc("EEDI2",
-                 "clip:clip;"
-                 "field:int;"
-                 "mthresh:int:opt;"
-                 "lthresh:int:opt;"
-                 "vthresh:int:opt;"
-                 "estr:int:opt;"
-                 "dstr:int:opt;"
-                 "maxd:int:opt;"
-                 "map:int:opt;"
-                 "nt:int:opt;"
-                 "pp:int:opt;",
-                 eedi2Create, nullptr, plugin);
+VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
+    vspapi->configPlugin("com.holywu.eedi2", "eedi2", "EEDI2", VS_MAKE_VERSION(7, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
+    vspapi->registerFunction("EEDI2",
+                             "clip:vnode;"
+                             "field:int;"
+                             "mthresh:int:opt;"
+                             "lthresh:int:opt;"
+                             "vthresh:int:opt;"
+                             "estr:int:opt;"
+                             "dstr:int:opt;"
+                             "maxd:int:opt;"
+                             "map:int:opt;"
+                             "nt:int:opt;"
+                             "pp:int:opt;",
+                             "clip:vnode;",
+                             eedi2Create, nullptr, plugin);
 }
