@@ -1,7 +1,7 @@
 project('EEDI2', 'cpp',
   default_options : ['buildtype=release', 'b_ndebug=if-release', 'cpp_std=c++14'],
   meson_version : '>=0.51.0',
-  version : '7'
+  version : '8'
 )
 
 sources = ['EEDI2/EEDI2.cpp']
