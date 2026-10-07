@@ -359,7 +359,8 @@ static void calcDirections(const VSFrame * src, const VSFrame * msk, VSFrame * d
             if (k > 1) {
                 std::sort(order, order + k);
 
-                const int mid = (k & 1) ? order[k / 2] : (order[(k - 1) / 2] + order[k / 2] + 1) / 2;
+                // Directions can be negative: >> rounds down like the AviSynth original, / would round toward zero.
+                const int mid = (k & 1) ? order[k / 2] : (order[(k - 1) / 2] + order[k / 2] + 1) >> 1;
                 const int lim = std::max(d->limlut[std::abs(mid)] / 4, 2);
                 int sum = 0;
                 unsigned count = 0;
@@ -579,7 +580,7 @@ static void filterMap(const VSFrame * msk, const VSFrame * dmsk, VSFrame * dst, 
             if (dmskp[x] == peak || mskp[x] != peak)
                 continue;
 
-            int dir = (dmskp[x] - neutral) / 4;
+            int dir = (dmskp[x] - neutral) >> 2;
             const int lim = std::max(std::abs(dir) * 2, twleve);
             dir >>= shift;
             bool ict = false, icb = false;
@@ -1097,20 +1098,20 @@ static void interpolateLattice(const VSFrame * omsk, VSFrame * dmsk, VSFrame * d
                     ((omskn[x - 1 - u] != peak && std::abs(omskn[x - 1 - u] - dmskp[x]) <= lim) ||
                      (omskn[x - u] != peak && std::abs(omskn[x - u] - dmskp[x]) <= lim) ||
                      (omskn[x + 1 - u] != peak && std::abs(omskn[x + 1 - u] - dmskp[x]) <= lim))) {
-                    const unsigned diff2 = std::abs(dstp[x + u / 2 - 1] - dstpnn[x - u / 2 - 1]) +
-                                           std::abs(dstp[x + u / 2] - dstpnn[x - u / 2]) +
-                                           std::abs(dstp[x + u / 2 + 1] - dstpnn[x - u / 2 + 1]);
+                    const unsigned diff2 = std::abs(dstp[x + (u >> 1) - 1] - dstpnn[x - (u >> 1) - 1]) +
+                                           std::abs(dstp[x + (u >> 1)] - dstpnn[x - (u >> 1)]) +
+                                           std::abs(dstp[x + (u >> 1) + 1] - dstpnn[x - (u >> 1) + 1]);
                     if (diff2 < d->nt4 &&
-                        (((std::abs(omskp[x + u / 2] - omskn[x - u / 2]) <= lim ||
-                           std::abs(omskp[x + u / 2] - omskn[x - ((u + 1) / 2)]) <= lim) &&
-                          omskp[x + u / 2] != peak) ||
-                         ((std::abs(omskp[x + ((u + 1) / 2)] - omskn[x - u / 2]) <= lim ||
-                           std::abs(omskp[x + ((u + 1) / 2)] - omskn[x - ((u + 1) / 2)]) <= lim) &&
-                          omskp[x + ((u + 1) / 2)] != peak))) {
-                        if ((std::abs(dmskp[x] - omskp[x + u / 2]) <= lim || std::abs(dmskp[x] - omskp[x + ((u + 1) / 2)]) <= lim) &&
-                            (std::abs(dmskp[x] - omskn[x - u / 2]) <= lim || std::abs(dmskp[x] - omskn[x - ((u + 1) / 2)]) <= lim)) {
-                            val = (dstp[x + u / 2] + dstp[x + ((u + 1) / 2)] +
-                                   dstpnn[x - u / 2] + dstpnn[x - ((u + 1) / 2)] + 2) / 4;
+                        (((std::abs(omskp[x + (u >> 1)] - omskn[x - (u >> 1)]) <= lim ||
+                           std::abs(omskp[x + (u >> 1)] - omskn[x - ((u + 1) >> 1)]) <= lim) &&
+                          omskp[x + (u >> 1)] != peak) ||
+                         ((std::abs(omskp[x + ((u + 1) >> 1)] - omskn[x - (u >> 1)]) <= lim ||
+                           std::abs(omskp[x + ((u + 1) >> 1)] - omskn[x - ((u + 1) >> 1)]) <= lim) &&
+                          omskp[x + ((u + 1) >> 1)] != peak))) {
+                        if ((std::abs(dmskp[x] - omskp[x + (u >> 1)]) <= lim || std::abs(dmskp[x] - omskp[x + ((u + 1) >> 1)]) <= lim) &&
+                            (std::abs(dmskp[x] - omskn[x - (u >> 1)]) <= lim || std::abs(dmskp[x] - omskn[x - ((u + 1) >> 1)]) <= lim)) {
+                            val = (dstp[x + (u >> 1)] + dstp[x + ((u + 1) >> 1)] +
+                                   dstpnn[x - (u >> 1)] + dstpnn[x - ((u + 1) >> 1)] + 2) / 4;
                             min = diff;
                             dir = u;
                         }
@@ -1130,8 +1131,8 @@ static void interpolateLattice(const VSFrame * omsk, VSFrame * dmsk, VSFrame * d
                 min = d->nt7;
 
                 for (int u = uStart2; u <= uStop2; u++) {
-                    const int p1 = dstp[x + u / 2] + dstp[x + ((u + 1) / 2)];
-                    const int p2 = dstpnn[x - u / 2] + dstpnn[x - ((u + 1) / 2)];
+                    const int p1 = dstp[x + (u >> 1)] + dstp[x + ((u + 1) >> 1)];
+                    const int p2 = dstpnn[x - (u >> 1)] + dstpnn[x - ((u + 1) >> 1)];
                     const unsigned diff = std::abs(dstp[x - 1] - dstpnn[x - u - 1]) + std::abs(dstp[x] - dstpnn[x - u]) + std::abs(dstp[x + 1] - dstpnn[x - u + 1]) +
                                           std::abs(dstpnn[x - 1] - dstp[x + u - 1]) + std::abs(dstpnn[x] - dstp[x + u]) + std::abs(dstpnn[x + 1] - dstp[x + u + 1]) +
                                           std::abs(p1 - p2);
@@ -1321,7 +1322,7 @@ static void calcDerivatives(const VSFrame * src, int * VS_RESTRICT x2, int * VS_
         const int Iy = (srcp[0] - srcpn[0]) >> shift;
         x2[0] = (Ix * Ix) / 2;
         y2[0] = (Iy * Iy) / 2;
-        xy[0] = (Ix * Iy) / 2;
+        xy[0] = (Ix * Iy) >> 1;
     }
 
     unsigned x;
@@ -1331,7 +1332,7 @@ static void calcDerivatives(const VSFrame * src, int * VS_RESTRICT x2, int * VS_
         const int Iy = (srcp[x] - srcpn[x]) >> shift;
         x2[x] = (Ix * Ix) / 2;
         y2[x] = (Iy * Iy) / 2;
-        xy[x] = (Ix * Iy) / 2;
+        xy[x] = (Ix * Iy) >> 1;
     }
 
     {
@@ -1339,7 +1340,7 @@ static void calcDerivatives(const VSFrame * src, int * VS_RESTRICT x2, int * VS_
         const int Iy = (srcp[x] - srcpn[x]) >> shift;
         x2[x] = (Ix * Ix) / 2;
         y2[x] = (Iy * Iy) / 2;
-        xy[x] = (Ix * Iy) / 2;
+        xy[x] = (Ix * Iy) >> 1;
     }
 
     srcpp += stride;
@@ -1355,7 +1356,7 @@ static void calcDerivatives(const VSFrame * src, int * VS_RESTRICT x2, int * VS_
             const int Iy = (srcpp[0] - srcpn[0]) >> shift;
             x2[0] = (Ix * Ix) / 2;
             y2[0] = (Iy * Iy) / 2;
-            xy[0] = (Ix * Iy) / 2;
+            xy[0] = (Ix * Iy) >> 1;
         }
 
         for (x = 1; x < width - 1; x++) {
@@ -1363,7 +1364,7 @@ static void calcDerivatives(const VSFrame * src, int * VS_RESTRICT x2, int * VS_
             const int Iy = (srcpp[x] - srcpn[x]) >> shift;
             x2[x] = (Ix * Ix) / 2;
             y2[x] = (Iy * Iy) / 2;
-            xy[x] = (Ix * Iy) / 2;
+            xy[x] = (Ix * Iy) >> 1;
         }
 
         {
@@ -1371,7 +1372,7 @@ static void calcDerivatives(const VSFrame * src, int * VS_RESTRICT x2, int * VS_
             const int Iy = (srcpp[x] - srcpn[x]) >> shift;
             x2[x] = (Ix * Ix) / 2;
             y2[x] = (Iy * Iy) / 2;
-            xy[x] = (Ix * Iy) / 2;
+            xy[x] = (Ix * Iy) >> 1;
         }
 
         srcpp += stride;
@@ -1387,7 +1388,7 @@ static void calcDerivatives(const VSFrame * src, int * VS_RESTRICT x2, int * VS_
         const int Iy = (srcpp[0] - srcp[0]) >> shift;
         x2[0] = (Ix * Ix) / 2;
         y2[0] = (Iy * Iy) / 2;
-        xy[0] = (Ix * Iy) / 2;
+        xy[0] = (Ix * Iy) >> 1;
     }
 
     for (x = 1; x < width - 1; x++) {
@@ -1395,7 +1396,7 @@ static void calcDerivatives(const VSFrame * src, int * VS_RESTRICT x2, int * VS_
         const int Iy = (srcpp[x] - srcp[x]) >> shift;
         x2[x] = (Ix * Ix) / 2;
         y2[x] = (Iy * Iy) / 2;
-        xy[x] = (Ix * Iy) / 2;
+        xy[x] = (Ix * Iy) >> 1;
     }
 
     {
@@ -1403,26 +1404,27 @@ static void calcDerivatives(const VSFrame * src, int * VS_RESTRICT x2, int * VS_
         const int Iy = (srcpp[x] - srcp[x]) >> shift;
         x2[x] = (Ix * Ix) / 2;
         y2[x] = (Iy * Iy) / 2;
-        xy[x] = (Ix * Iy) / 2;
+        xy[x] = (Ix * Iy) >> 1;
     }
 }
 
+// The vertical pass shifts by 18, not 16, as in the AviSynth original; xy can be negative, so both passes use >>.
 static void gaussianBlurSqrt2(const int * src, int * tmp, int * dst, const unsigned width, const unsigned height) noexcept {
     const int * srcp = src;
     int * VS_RESTRICT dstp = tmp;
 
     for (unsigned y = 0; y < height; y++) {
         unsigned x = 0;
-        dstp[x] = (srcp[x + 4] * 678 + srcp[x + 3] * 3902 + srcp[x + 2] * 13618 + srcp[x + 1] * 28830 + srcp[x] * 18508 + 32768) / 65536; x++;
-        dstp[x] = (srcp[x + 4] * 678 + srcp[x + 3] * 3902 + srcp[x + 2] * 13618 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) / 65536; x++;
-        dstp[x] = (srcp[x + 4] * 678 + srcp[x + 3] * 3902 + (srcp[x - 2] + srcp[x + 2]) * 6809 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) / 65536; x++;
-        dstp[x] = (srcp[x + 4] * 678 + (srcp[x - 3] + srcp[x + 3]) * 1951 + (srcp[x - 2] + srcp[x + 2]) * 6809 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) / 65536;
+        dstp[x] = (srcp[x + 4] * 678 + srcp[x + 3] * 3902 + srcp[x + 2] * 13618 + srcp[x + 1] * 28830 + srcp[x] * 18508 + 32768) >> 16; x++;
+        dstp[x] = (srcp[x + 4] * 678 + srcp[x + 3] * 3902 + srcp[x + 2] * 13618 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) >> 16; x++;
+        dstp[x] = (srcp[x + 4] * 678 + srcp[x + 3] * 3902 + (srcp[x - 2] + srcp[x + 2]) * 6809 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) >> 16; x++;
+        dstp[x] = (srcp[x + 4] * 678 + (srcp[x - 3] + srcp[x + 3]) * 1951 + (srcp[x - 2] + srcp[x + 2]) * 6809 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) >> 16;
         for (x = 4; x < width - 4; x++)
-            dstp[x] = ((srcp[x - 4] + srcp[x + 4]) * 339 + (srcp[x - 3] + srcp[x + 3]) * 1951 + (srcp[x - 2] + srcp[x + 2]) * 6809 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) / 65536;
-        dstp[x] = (srcp[x - 4] * 678 + (srcp[x - 3] + srcp[x + 3]) * 1951 + (srcp[x - 2] + srcp[x + 2]) * 6809 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) / 65536; x++;
-        dstp[x] = (srcp[x - 4] * 678 + srcp[x - 3] * 3902 + (srcp[x - 2] + srcp[x + 2]) * 6809 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) / 65536; x++;
-        dstp[x] = (srcp[x - 4] * 678 + srcp[x - 3] * 3902 + srcp[x - 2] * 13618 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) / 65536; x++;
-        dstp[x] = (srcp[x - 4] * 678 + srcp[x - 3] * 3902 + srcp[x - 2] * 13618 + srcp[x - 1] * 28830 + srcp[x] * 18508 + 32768) / 65536;
+            dstp[x] = ((srcp[x - 4] + srcp[x + 4]) * 339 + (srcp[x - 3] + srcp[x + 3]) * 1951 + (srcp[x - 2] + srcp[x + 2]) * 6809 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) >> 16;
+        dstp[x] = (srcp[x - 4] * 678 + (srcp[x - 3] + srcp[x + 3]) * 1951 + (srcp[x - 2] + srcp[x + 2]) * 6809 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) >> 16; x++;
+        dstp[x] = (srcp[x - 4] * 678 + srcp[x - 3] * 3902 + (srcp[x - 2] + srcp[x + 2]) * 6809 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) >> 16; x++;
+        dstp[x] = (srcp[x - 4] * 678 + srcp[x - 3] * 3902 + srcp[x - 2] * 13618 + (srcp[x - 1] + srcp[x + 1]) * 14415 + srcp[x] * 18508 + 32768) >> 16; x++;
+        dstp[x] = (srcp[x - 4] * 678 + srcp[x - 3] * 3902 + srcp[x - 2] * 13618 + srcp[x - 1] * 28830 + srcp[x] * 18508 + 32768) >> 16;
 
         srcp += width;
         dstp += width;
@@ -1440,7 +1442,7 @@ static void gaussianBlurSqrt2(const int * src, int * tmp, int * dst, const unsig
     const int * src4n = srcp + width * 4;
 
     for (unsigned x = 0; x < width; x++)
-        dstp[x] = (src4n[x] * 678 + src3n[x] * 3902 + src2n[x] * 13618 + srcpn[x] * 28830 + srcp[x] * 18508 + 32768) / 65536;
+        dstp[x] = (src4n[x] * 678 + src3n[x] * 3902 + src2n[x] * 13618 + srcpn[x] * 28830 + srcp[x] * 18508 + 32768) >> 18;
 
     src4p += width;
     src3p += width;
@@ -1454,7 +1456,7 @@ static void gaussianBlurSqrt2(const int * src, int * tmp, int * dst, const unsig
     dstp += width;
 
     for (unsigned x = 0; x < width; x++)
-        dstp[x] = (src4n[x] * 678 + src3n[x] * 3902 + src2n[x] * 13618 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) / 65536;
+        dstp[x] = (src4n[x] * 678 + src3n[x] * 3902 + src2n[x] * 13618 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) >> 18;
 
     src4p += width;
     src3p += width;
@@ -1468,7 +1470,7 @@ static void gaussianBlurSqrt2(const int * src, int * tmp, int * dst, const unsig
     dstp += width;
 
     for (unsigned x = 0; x < width; x++)
-        dstp[x] = (src4n[x] * 678 + src3n[x] * 3902 + (src2p[x] + src2n[x]) * 6809 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) / 65536;
+        dstp[x] = (src4n[x] * 678 + src3n[x] * 3902 + (src2p[x] + src2n[x]) * 6809 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) >> 18;
 
     src4p += width;
     src3p += width;
@@ -1482,7 +1484,7 @@ static void gaussianBlurSqrt2(const int * src, int * tmp, int * dst, const unsig
     dstp += width;
 
     for (unsigned x = 0; x < width; x++)
-        dstp[x] = (src4n[x] * 678 + (src3p[x] + src3n[x]) * 1951 + (src2p[x] + src2n[x]) * 6809 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) / 65536;
+        dstp[x] = (src4n[x] * 678 + (src3p[x] + src3n[x]) * 1951 + (src2p[x] + src2n[x]) * 6809 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) >> 18;
 
     src4p += width;
     src3p += width;
@@ -1497,7 +1499,7 @@ static void gaussianBlurSqrt2(const int * src, int * tmp, int * dst, const unsig
 
     for (unsigned y = 4; y < height - 4; y++) {
         for (unsigned x = 0; x < width; x++)
-            dstp[x] = ((src4p[x] + src4n[x]) * 339 + (src3p[x] + src3n[x]) * 1951 + (src2p[x] + src2n[x]) * 6809 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) / 65536;
+            dstp[x] = ((src4p[x] + src4n[x]) * 339 + (src3p[x] + src3n[x]) * 1951 + (src2p[x] + src2n[x]) * 6809 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) >> 18;
 
         src4p += width;
         src3p += width;
@@ -1512,7 +1514,7 @@ static void gaussianBlurSqrt2(const int * src, int * tmp, int * dst, const unsig
     }
 
     for (unsigned x = 0; x < width; x++)
-        dstp[x] = (src4p[x] * 678 + (src3p[x] + src3n[x]) * 1951 + (src2p[x] + src2n[x]) * 6809 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) / 65536;
+        dstp[x] = (src4p[x] * 678 + (src3p[x] + src3n[x]) * 1951 + (src2p[x] + src2n[x]) * 6809 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) >> 18;
 
     src4p += width;
     src3p += width;
@@ -1526,7 +1528,7 @@ static void gaussianBlurSqrt2(const int * src, int * tmp, int * dst, const unsig
     dstp += width;
 
     for (unsigned x = 0; x < width; x++)
-        dstp[x] = (src4p[x] * 678 + src3p[x] * 3902 + (src2p[x] + src2n[x]) * 6809 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) / 65536;
+        dstp[x] = (src4p[x] * 678 + src3p[x] * 3902 + (src2p[x] + src2n[x]) * 6809 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) >> 18;
 
     src4p += width;
     src3p += width;
@@ -1540,7 +1542,7 @@ static void gaussianBlurSqrt2(const int * src, int * tmp, int * dst, const unsig
     dstp += width;
 
     for (unsigned x = 0; x < width; x++)
-        dstp[x] = (src4p[x] * 678 + src3p[x] * 3902 + src2p[x] * 13618 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) / 65536;
+        dstp[x] = (src4p[x] * 678 + src3p[x] * 3902 + src2p[x] * 13618 + (srcpp[x] + srcpn[x]) * 14415 + srcp[x] * 18508 + 32768) >> 18;
 
     src4p += width;
     src3p += width;
@@ -1554,7 +1556,7 @@ static void gaussianBlurSqrt2(const int * src, int * tmp, int * dst, const unsig
     dstp += width;
 
     for (unsigned x = 0; x < width; x++)
-        dstp[x] = (src4p[x] * 678 + src3p[x] * 3902 + src2p[x] * 13618 + srcpp[x] * 28830 + srcp[x] * 18508 + 32768) / 65536;
+        dstp[x] = (src4p[x] * 678 + src3p[x] * 3902 + src2p[x] * 13618 + srcpp[x] * 28830 + srcp[x] * 18508 + 32768) >> 18;
 }
 
 template<typename T>
