@@ -1664,7 +1664,9 @@ static void process(const VSFrame * src, VSFrame * dst, VSFrame * msk, VSFrame *
                         gaussianBlurSqrt2(cx2, tmpc, cx2, vsapi->getFrameWidth(src, plane), vsapi->getFrameHeight(src, plane));
                         gaussianBlurSqrt2(cy2, tmpc, cy2, vsapi->getFrameWidth(src, plane), vsapi->getFrameHeight(src, plane));
                         gaussianBlurSqrt2(cxy, tmpc, cxy, vsapi->getFrameWidth(src, plane), vsapi->getFrameHeight(src, plane));
-                        postProcessCorner<T>(tmp2_2, dst2, cx2, cy2, cxy, plane, field, d->vi->format.bitsPerSample, vsapi);
+                        // pp=3 copied the lattice direction map from tmp2 into tmp2_2 above. With pp=2 alone, tmp2_2 holds the
+                        // upscaled map only on the field rows; the rows read here were never written, so use tmp2 directly.
+                        postProcessCorner<T>(d->pp == 3 ? tmp2_2 : tmp2, dst2, cx2, cy2, cxy, plane, field, d->vi->format.bitsPerSample, vsapi);
                     }
                 }
             }
@@ -1938,7 +1940,7 @@ static void VS_CC eedi2Create(const VSMap *in, VSMap *out, void *userData, VSCor
 // Init
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
-    vspapi->configPlugin("com.holywu.eedi2", "eedi2", "EEDI2", VS_MAKE_VERSION(8, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
+    vspapi->configPlugin("com.holywu.eedi2", "eedi2", "EEDI2", VS_MAKE_VERSION(9, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
     vspapi->registerFunction("EEDI2",
                              "clip:vnode;"
                              "field:int;"
