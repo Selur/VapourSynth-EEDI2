@@ -56,6 +56,8 @@ If no system VapourSynth development files are found, the vendored API 4 headers
 Installation
 ============
 
+Download the prebuilt wheels from the [latest release](https://github.com/Selur/VapourSynth-EEDI2/releases/latest).
+
 Every push builds Python wheels for Windows x64, Linux x86_64 and macOS arm64 (see `.github/workflows/build-wheels.yml`); tagged releases (`v*`) attach them to a GitHub release. The wheel installs the plugin into the VapourSynth plugin folder of the Python package, so it is autoloaded:
 
 ```
