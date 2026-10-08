@@ -1943,7 +1943,7 @@ static void VS_CC eedi2Create(const VSMap *in, VSMap *out, void *userData, VSCor
 // Init
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
-    vspapi->configPlugin("com.holywu.eedi2", "eedi2", "EEDI2", VS_MAKE_VERSION(10, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
+    vspapi->configPlugin("com.holywu.eedi2", "eedi2", "EEDI2", VS_MAKE_VERSION(9, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
     vspapi->registerFunction("EEDI2",
                              "clip:vnode;"
                              "field:int;"
