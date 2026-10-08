@@ -278,8 +278,11 @@ static void calcDirections(const VSFrame * src, const VSFrame * msk, VSFrame * d
             if (mskp[x] != peak || (mskp[x - 1] != peak && mskp[x + 1] != peak))
                 continue;
 
-            const int uStart = std::max(-x + 1, -maxd);
-            const int uStop = std::min(width - 2 - x, maxd);
+            // The comparisons read x - 1 - u as well as x - 1 + u, so the range has to be symmetric: the one-sided bounds of the
+            // original let negative u read past the end of the row (on the last row past the end of the frame, nondeterministic).
+            const int uLim = std::min({ x - 1, width - 2 - x, maxd });
+            const int uStart = -uLim;
+            const int uStop = uLim;
             const unsigned min0 = std::abs(srcp[x] - srcpn[x]) + std::abs(srcp[x] - srcpp[x]);
             unsigned minA = std::min(d->nt19, min0 * 9);
             unsigned minB = std::min(d->nt13, min0 * 6);
